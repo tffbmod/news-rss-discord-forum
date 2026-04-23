@@ -11,6 +11,7 @@ WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
 
 STATE_FILE = "last_seen.json"
 MAX_ITEMS = 500
+MAX_POSTS_PER_RUN = 5
 
 if not WEBHOOK_URL:
     raise ValueError("DISCORD_WEBHOOK is not set")
@@ -129,6 +130,17 @@ def main():
 
     seen_ids, seen_id_set, seen_url_set = load_seen()
 
+    # ✅ FIRST RUN PROTECTION
+    if not seen_ids:
+        print("First run detected — saving current feed without posting")
+
+        for item in items:
+            seen_ids.append(item["guid"])
+            seen_url_set.add(item["link"])
+
+        save_seen(seen_ids, seen_url_set)
+        return
+
     new_items = []
 
     for item in items:
@@ -142,7 +154,11 @@ def main():
         print("No new articles.")
         return
 
-    new_items.reverse()
+    # Oldest first
+    new_items.sort(key=lambda x: x.get("pub_date", ""))
+
+    # ✅ LIMIT POSTS PER RUN
+    new_items = new_items[:MAX_POSTS_PER_RUN]
 
     updated = False
 
