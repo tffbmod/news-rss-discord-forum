@@ -4,6 +4,7 @@ import requests
 import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse
 
 RSS_URL = "https://www.thefantasyfootballers.com/feed/recent_news/"
 
@@ -18,29 +19,38 @@ if not WEBHOOK_URL:
 
 
 # ----------------------------
+# KEY EXTRACTION
+# ----------------------------
+def extract_key(link):
+    try:
+        path = urlparse(link).path.strip("/")
+        if path.startswith("news/"):
+            return path.replace("news/", "").rstrip("/")
+    except:
+        pass
+    return link  # fallback
+
+
+# ----------------------------
 # STATE
 # ----------------------------
 def load_seen():
     if not os.path.exists(STATE_FILE):
-        return [], set(), set()
+        return [], set()
 
     try:
         with open(STATE_FILE, "r") as f:
             data = json.load(f)
-            ids = data.get("seen_ids", [])
-            urls = data.get("seen_urls", [])
-            return ids, set(ids), set(urls)
+            seen_list = data.get("seen", [])
+            return seen_list, set(seen_list)
     except:
-        return [], set(), set()
+        return [], set()
 
 
-def save_seen(ids, urls):
+def save_seen(seen_list):
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({
-            "seen_ids": ids,
-            "seen_urls": list(urls)
-        }, f)
+        json.dump({"seen": seen_list}, f, indent=2)
     os.replace(tmp, STATE_FILE)
 
 
@@ -58,10 +68,13 @@ def parse_rss(xml_data):
     items = []
 
     for item in root.findall(".//item"):
+        link = item.findtext("link")
+        key = extract_key(link)
+
         items.append({
             "title": item.findtext("title"),
-            "link": item.findtext("link"),
-            "guid": item.findtext("guid") or item.findtext("link"),
+            "link": link,
+            "key": key,
             "pub_date": item.findtext("pubDate")
         })
 
@@ -128,26 +141,27 @@ def main():
     xml_data = fetch_rss()
     items = parse_rss(xml_data)
 
-    seen_ids, seen_id_set, seen_url_set = load_seen()
+    seen_list, seen_set = load_seen()
 
-    # ✅ FIRST RUN PROTECTION
-    if not seen_ids:
+    # ----------------------------
+    # FIRST RUN PROTECTION
+    # ----------------------------
+    if not seen_list:
         print("First run detected — saving current feed without posting")
 
         for item in items:
-            seen_ids.append(item["guid"])
-            seen_url_set.add(item["link"])
+            seen_list.append(item["key"])
 
-        save_seen(seen_ids, seen_url_set)
+        save_seen(seen_list)
         return
 
+    # ----------------------------
+    # FIND NEW ITEMS
+    # ----------------------------
     new_items = []
 
     for item in items:
-        if (
-            item["guid"] not in seen_id_set and
-            item["link"] not in seen_url_set
-        ):
+        if item["key"] not in seen_set:
             new_items.append(item)
 
     if not new_items:
@@ -157,35 +171,38 @@ def main():
     # Oldest first
     new_items.sort(key=lambda x: x.get("pub_date", ""))
 
-    # ✅ LIMIT POSTS PER RUN
+    # Limit per run
     new_items = new_items[:MAX_POSTS_PER_RUN]
 
     updated = False
 
+    # ----------------------------
+    # POST LOOP
+    # ----------------------------
     for item in new_items:
         title = item["title"] or "No title"
         link = item["link"]
-        guid = item["guid"]
+        key = item["key"]
 
         time_str = format_time(item["pub_date"])
 
         success = send_to_discord(title, link, time_str)
 
         if success:
-            seen_ids.append(guid)
-            seen_id_set.add(guid)
-            seen_url_set.add(link)
+            seen_list.append(key)
+            seen_set.add(key)
             updated = True
         else:
             print("Will retry next run")
 
         time.sleep(1)
 
-    if len(seen_ids) > MAX_ITEMS:
-        seen_ids = seen_ids[-MAX_ITEMS:]
+    # Trim old entries
+    if len(seen_list) > MAX_ITEMS:
+        seen_list = seen_list[-MAX_ITEMS:]
 
     if updated:
-        save_seen(seen_ids, seen_url_set)
+        save_seen(seen_list)
 
     print("---- RUN END ----")
 
