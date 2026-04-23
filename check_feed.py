@@ -5,7 +5,7 @@ import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
-RSS_URL = "PASTE_YOUR_RSS_FEED_URL_HERE"
+RSS_URL = "https://www.thefantasyfootballers.com/feed/recent_news/"
 
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
 
